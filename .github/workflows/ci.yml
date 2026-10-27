@@ -1,0 +1,137 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 校验告警规则（promtool）
+        run: |
+          docker run --rm -v "$PWD/prometheus:/p" --entrypoint sh \
+            prom/prometheus:v3.15.0 -c 'promtool check rules /p/rules/*.yml'
+
+      - name: 校验 alertmanager 配置（amtool）
+        run: |
+          docker run --rm -v "$PWD/alertmanager:/a" --entrypoint amtool \
+            prom/alertmanager:v0.34.1 check-config /a/no-notify.yml.example
+
+      - name: Python 语法与清单测试
+        run: |
+          python3 -m py_compile cmdb/render_targets.py cmdb/setup_site.py
+          python3 -m unittest discover -s tests -v
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck
+          shellcheck --severity=error --shell=bash \
+            install.sh uninstall.sh scripts/*.sh
+
+      - name: compose 配置合并校验
+        run: |
+          printf 'GRAFANA_PASSWORD=ci-only-placeholder\n' > .env
+          cp alertmanager/no-notify.yml.example alertmanager/alertmanager.yml
+          cp cmdb/services.json.example cmdb/services.json
+          docker compose config -q
+          GRAFANA_PASSWORD=ci-only-placeholder docker compose -f docker-compose.desktop.yml config -q
+
+      - name: compose 公开访问 profile 校验
+        env:
+          COMPOSE_PROFILES: public
+          PUBLIC_ADDR: ":8080"
+          BASIC_AUTH_USER: admin
+          CADDY_BASIC_AUTH: "$2a$10$abcdefghijklmnopqrstuv"
+          GF_AUTH_ANONYMOUS_ENABLED: "true"
+        run: |
+          docker compose config -q
+          docker compose config > /tmp/public-compose.yml
+          grep -q 'caddy:2.10.0' /tmp/public-compose.yml
+          grep -q 'GF_AUTH_ANONYMOUS_ENABLED: "true"' /tmp/public-compose.yml
+          grep -q 'CADDY_BASIC_AUTH' /tmp/public-compose.yml
+          grep -q 'PUBLIC_ADDR: :8080' /tmp/public-compose.yml
+
+      - name: 渲染一次目标文件
+        run: |
+          python3 cmdb/render_targets.py
+          test -s prometheus/targets/http-probe.json
+          test -s prometheus/targets/node.json
+
+      - name: 启动并检查本地服务
+        timeout-minutes: 12
+        run: |
+          docker compose up -d
+          ready=0
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 3 http://127.0.0.1:9090/-/ready >/dev/null &&
+               curl -fsS --max-time 3 http://127.0.0.1:3000/api/health >/dev/null &&
+               curl -fsS --max-time 3 http://127.0.0.1:9093/-/healthy >/dev/null &&
+               curl -fsS --max-time 3 http://127.0.0.1:9100/metrics >/dev/null &&
+               curl -fsS --max-time 3 http://127.0.0.1:9115/metrics >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 3
+          done
+          test "$ready" = 1
+          python3 - <<'PY'
+          import json
+          import urllib.request
+          with urllib.request.urlopen("http://127.0.0.1:9090/api/v1/rules") as response:
+              data = json.load(response)
+          assert data["status"] == "success"
+          names = {
+              rule["name"]
+              for group in data["data"]["groups"]
+              for rule in group["rules"]
+          }
+          assert "ServiceProbeFailed" in names, names
+          PY
+
+      - name: 校验面板 PromQL 可在真实栈上解析
+        run: |
+          python3 - <<'PY'
+          import json
+          import urllib.parse
+          import urllib.request
+
+          path = "grafana/provisioning/dashboards/infra-overview.json"
+          dashboard = json.load(open(path, encoding="utf-8"))
+          expressions = [
+              target["expr"]
+              for panel in dashboard["panels"]
+              for target in panel["targets"]
+          ]
+          for expr in expressions:
+              url = "http://127.0.0.1:9090/api/v1/query?" + urllib.parse.urlencode(
+                  {"query": expr}
+              )
+              with urllib.request.urlopen(url, timeout=10) as response:
+                  payload = json.load(response)
+              assert payload["status"] == "success", (expr, payload)
+          print(f"validated {len(expressions)} panel queries")
+          PY
+
+      - name: 启动失败时保留诊断
+        if: failure()
+        run: docker compose logs --tail=60
+
+      - name: 停止测试容器并保留测试卷
+        if: always()
+        run: docker compose down
+
+      - name: 干净目录跑 install.sh 冒烟
+        timeout-minutes: 15
+        run: |
+          tmp="$(mktemp -d)"
+          git archive HEAD | tar -x -C "$tmp"
+          cd "$tmp"
+          trap 'docker compose down 2>/dev/null || true' EXIT
+          bash install.sh --no-sync -y
+          curl -fsS --max-time 5 http://127.0.0.1:9090/-/ready >/dev/null
+          curl -fsS --max-time 5 http://127.0.0.1:3000/api/health >/dev/null

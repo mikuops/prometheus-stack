@@ -1,0 +1,28 @@
+# 示例仅供阅读。实际配置请运行 scripts/configure-email.sh。
+# 授权码单独保存在不入库的文件中，不写进此 YAML。
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: mail
+  group_by: ['alertname', 'service']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: mail
+    email_configs:
+      - to: '<YOUR_EMAIL>'
+        from: '<YOUR_EMAIL>'
+        smarthost: 'smtp.163.com:465'
+        auth_username: '<YOUR_EMAIL>'
+        auth_password_file: /etc/alertmanager/secrets/smtp_password
+        require_tls: true
+        send_resolved: true
+
+# critical 抑制同名 warning，避免同一次故障发两封
+inhibit_rules:
+  - source_matchers: ['severity="critical"']
+    target_matchers: ['severity="warning"']
+    equal: ['alertname', 'instance']

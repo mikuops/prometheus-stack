@@ -1,0 +1,78 @@
+groups:
+  - name: infra-basic
+    interval: 30s
+    rules:
+      - alert: InstanceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "抓取失败：{{ $labels.job }} / {{ $labels.instance }}"
+          description: "Prometheus 连续 2 分钟无法抓取 {{ $labels.instance }}，检查目标进程、端口与网络。"
+
+      - alert: NodeHighCPU
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} CPU 使用率 > 80%"
+          description: "当前 {{ printf \"%.1f\" $value }}%，持续 5 分钟。"
+
+      - alert: NodeHighMemory
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} 内存使用率 > 85%"
+          description: "当前 {{ printf \"%.1f\" $value }}%，关注是否内存泄漏。"
+
+      - alert: NodeDiskUsageHigh
+        expr: (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|nsfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|nsfs"}) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} {{ $labels.mountpoint }} 使用率 > 85%"
+          description: "当前 {{ printf \"%.1f\" $value }}%，请清理日志或扩容。"
+
+      - alert: NodeDiskWillFillIn4Hours
+        expr: predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|nsfs"}[1h], 4 * 3600) < 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} {{ $labels.mountpoint }} 预计 4 小时内写满"
+          description: "按最近 1 小时的增长趋势线性预测，可用空间将在 4 小时内归零。"
+
+  - name: probe-basic
+    interval: 30s
+    rules:
+      - alert: ServiceProbeFailed
+        expr: probe_success{job="http-probe"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "站点探测失败：{{ $labels.service }}"
+          description: "{{ $labels.instance }} 连续 1 分钟无法正常响应。"
+
+      - alert: ServiceProbeSlow
+        expr: probe_duration_seconds{job="http-probe"} > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "站点响应慢：{{ $labels.service }}"
+          description: "响应耗时 {{ printf \"%.2f\" $value }}s，门限 2s。"
+
+      - alert: TlsCertExpiringSoon
+        expr: (probe_ssl_earliest_cert_expiry > 0) and (probe_ssl_earliest_cert_expiry - time() < 15 * 24 * 3600)
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "证书即将到期：{{ $labels.service }}"
+          description: "{{ $labels.instance }} 的证书距到期不足 15 天（差值 {{ printf \"%.0f\" $value }} 秒），请提前续期。"

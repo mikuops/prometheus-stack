@@ -1,0 +1,72 @@
+# 仅用于在 Mac/Windows 的 Docker Desktop 上浏览界面，不能用于真实主机监控。
+# 与 docker-compose.yml 的区别：
+#   - 使用 bridge 网络，容器之间用服务名互访；
+#   - 不挂载 /proc、/sys，node-exporter 显示的是 Docker 的 Linux 虚拟机指标；
+#   - 探测目标是栈内端点，不是你的网站。
+# 用法：docker compose -f docker-compose.desktop.yml up -d
+name: prometheus-stack-desktop
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.desktop.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.listen-address=0.0.0.0:9090'
+      - '--web.enable-lifecycle'
+    ports:
+      - '127.0.0.1:9090:9090'
+    depends_on:
+      - alertmanager
+
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    restart: unless-stopped
+    volumes:
+      - ./alertmanager/no-notify.yml.example:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.listen-address=0.0.0.0:9093'
+    ports:
+      - '127.0.0.1:9093:9093'
+
+  node-exporter:
+    image: prom/node-exporter:v1.12.1
+    restart: unless-stopped
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.29.1
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.3
+    restart: unless-stopped
+    environment:
+      GF_SERVER_HTTP_ADDR: 0.0.0.0
+      GF_SERVER_HTTP_PORT: '3000'
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?请先复制 .env.example 为 .env 并设置 GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/provisioning/datasources/prometheus.desktop.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+    ports:
+      - '127.0.0.1:3000:3000'
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  alertmanager-data:

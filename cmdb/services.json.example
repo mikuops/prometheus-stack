@@ -1,0 +1,47 @@
+{
+  "hosts": [
+    {
+      "name": "local",
+      "address": "127.0.0.1",
+      "port": 9100,
+      "env": "prod",
+      "role": "server",
+      "enabled": true
+    }
+  ],
+  "services": [
+    {
+      "name": "prometheus",
+      "url": "http://127.0.0.1:9090/-/ready",
+      "env": "prod",
+      "team": "infra",
+      "module": "http_2xx",
+      "enabled": true
+    },
+    {
+      "name": "alertmanager",
+      "url": "http://127.0.0.1:9093/-/healthy",
+      "env": "prod",
+      "team": "infra",
+      "module": "http_2xx",
+      "enabled": true
+    },
+    {
+      "name": "grafana",
+      "url": "http://127.0.0.1:3000/api/health",
+      "env": "prod",
+      "team": "infra",
+      "module": "http_2xx",
+      "enabled": true
+    },
+    {
+      "name": "website-home",
+      "url": "http://127.0.0.1:18080/",
+      "env": "prod",
+      "team": "web",
+      "module": "http_2xx",
+      "enabled": false,
+      "note": "改成你自己的站点 URL，再把 enabled 设为 true"
+    }
+  ]
+}

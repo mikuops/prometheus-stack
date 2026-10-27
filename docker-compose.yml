@@ -1,0 +1,107 @@
+# 监控告警栈：Prometheus + Alertmanager + Grafana + blackbox/node-exporter
+# 默认所有 Web 端口只监听 127.0.0.1，通过 SSH 端口转发访问。
+# 加 `--profile public`（或 install.sh --public）才会启动 caddy，把 Grafana 以
+# TLS + Basic Auth 的方式放到公网；此时 Prometheus / Alertmanager / exporter
+# 仍然只监听回环，不对外暴露。
+services:
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - ./prometheus/targets:/etc/prometheus/targets:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.listen-address=127.0.0.1:9090'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - alertmanager
+
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/secrets:/etc/alertmanager/secrets:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.listen-address=127.0.0.1:9093'
+
+  node-exporter:
+    image: prom/node-exporter:v1.12.1
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--web.listen-address=127.0.0.1:9100'
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.29.1
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - '--config.file=/etc/blackbox_exporter/config.yml'
+      - '--web.listen-address=127.0.0.1:9115'
+
+  grafana:
+    image: grafana/grafana:13.2.3
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_SERVER_HTTP_PORT: '3000'
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?请先复制 .env.example 为 .env 并设置 GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      # --public 时由 install.sh 置为 true：Caddy 已做 Basic Auth，
+      # Grafana 再要求登录一次会让访客登两遍，所以公开模式下降为只读匿名访问。
+      GF_AUTH_ANONYMOUS_ENABLED: ${GF_AUTH_ANONYMOUS_ENABLED:-false}
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+
+  # 可选的反向代理：只有启用 public profile 时才会创建。
+  # 必须用 host 网络，否则连不上绑在 127.0.0.1:3000 的 Grafana。
+  caddy:
+    image: caddy:2.10.0
+    profiles: ["public"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PUBLIC_ADDR: ${PUBLIC_ADDR:-:8080}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:-admin}
+      CADDY_BASIC_AUTH: ${CADDY_BASIC_AUTH:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - grafana
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  alertmanager-data:
+  caddy-data:
+  caddy-config:

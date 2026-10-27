@@ -1,0 +1,68 @@
+groups:
+  - name: host-basic
+    interval: 30s
+    rules:
+      - alert: HostLoadHigh
+        expr: |
+          node_load1 / on(instance) count by (instance) (node_cpu_seconds_total{mode="idle"}) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} 负载偏高（每核 {{ printf \"%.2f\" $value }}）"
+          description: "1 分钟负载持续 10 分钟超过 CPU 核数的 2 倍。"
+
+      - alert: HostSwapHigh
+        expr: |
+          (node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes) / node_memory_SwapTotal_bytes * 100 > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} Swap 使用率 > 50%"
+          description: "当前 {{ printf \"%.1f\" $value }}%，通常意味着内存不足。"
+
+      - alert: HostInodesHigh
+        expr: |
+          (1 - node_filesystem_files_free{fstype!~"tmpfs|overlay|squashfs|nsfs"} / node_filesystem_files{fstype!~"tmpfs|overlay|squashfs|nsfs"}) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} {{ $labels.mountpoint }} inode 使用率 > 85%"
+          description: "磁盘还有空间但 inode 快用尽时，新建文件同样会失败。"
+
+      - alert: HostFileDescriptorsHigh
+        expr: node_filefd_allocated / node_filefd_maximum * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} 文件描述符使用率 > 80%"
+          description: "当前 {{ printf \"%.1f\" $value }}%，关注是否有连接泄漏。"
+
+      - alert: HostNetworkErrors
+        expr: rate(node_network_receive_errs_total{device!="lo"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} {{ $labels.device }} 网卡接收错误"
+          description: "出现持续接收错误，检查网卡、驱动或对端链路。"
+
+      - alert: HostRebooted
+        expr: changes(node_boot_time_seconds[10m]) > 0
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.instance }} 主机发生过重启"
+          description: "10 分钟内启动时间发生变化，确认是否为计划内重启。"
+
+      - alert: ScrapeSlow
+        expr: scrape_duration_seconds > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "抓取变慢：{{ $labels.job }} / {{ $labels.instance }}"
+          description: "单次抓取耗时 {{ printf \"%.2f\" $value }}s，通常说明目标端指标过多或负载过高。"

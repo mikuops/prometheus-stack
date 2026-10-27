@@ -1,0 +1,36 @@
+# 仅当 install.sh 带 --public 时启用（Compose profile: public）。
+# 职责：TLS 证书自动签发 → 一层 Basic Auth → 反代到只监听 127.0.0.1 的 Grafana。
+# Prometheus / Alertmanager / exporter 的工作端口一个都不对外，仍然只听回环。
+#
+# 站点地址来自 .env 的 PUBLIC_ADDR：
+#   域名（如 mon.example.com）→ Caddy 自动申请证书，监听 443 并把 80 重定向过去
+#   :8080                     → 纯 HTTP，用于没有域名的场景（--public :8080）
+
+{
+	admin off
+}
+
+{$PUBLIC_ADDR} {
+	encode zstd gzip
+
+	basic_auth {
+		{$BASIC_AUTH_USER} {$CADDY_BASIC_AUTH}
+	}
+
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		-Server
+	}
+
+	# Grafana 的实时推送走 WebSocket，reverse_proxy 会自动升级，不需要额外配置
+	reverse_proxy 127.0.0.1:3000 {
+		header_up X-Real-IP {remote_host}
+	}
+
+	# 想把 Alertmanager 的原始界面也放出去，取消下面这段注释，
+	# 并在 README 里注明它没有应用层认证（用户能改静默、能看全部告警）。
+	# handle_path /alert/* {
+	# 	reverse_proxy 127.0.0.1:9093
+	# }
+}
